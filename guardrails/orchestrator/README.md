@@ -13,11 +13,88 @@
                   uri:  https://github.com/trustyai-explainability/trustyai-service-operator/tarball/main
     managementState: Managed
 
+* **Optionally**, enable metrics and tracing by following the steps in Configuring OpenTelemetry
+
+## Configuring OpenTelemetry
+1. Install the Red Hat OpenShift distributed tracing platform
+
+2. Create a Jaegar instance
+
+3. Install the Red Hat build of OpenTelemetry
+
+4. Create an OpenTelemetryCollector instance
+
+    ```
+    apiVersion: opentelemetry.io/v1beta1
+    kind: OpenTelemetryCollector
+    metadata:
+    name: fms-otel-collector
+    spec:
+      observability:
+        metrics: {}
+      deploymentUpdateStrategy: {}
+      config: # Ref https://opentelemetry.io/docs/collector/configuration/#basics
+        connectors:
+          spanmetrics:
+            metrics_flush_interval: 15s
+        exporters:
+          debug: {}
+          otlp:
+            endpoint: 'my-jaeger-collector-headless.gorch-test.svc.cluster.local:4317' # jaeger-all-in-one collector headless service created by Jaeger operator
+            tls:
+              insecure: true
+          prometheus:
+            add_metric_suffixes: false
+            endpoint: '0.0.0.0:8889' # prometheus service endpoint can be specified here
+            resource_to_telemetry_conversion:
+              enabled: true
+        processors:
+          batch:
+            send_batch_size: 10000
+            timeout: 10s
+          memory_limiter:
+            check_interval: 1s
+            limit_percentage: 75
+            spike_limit_percentage: 15
+        receivers:
+          otlp: # exported traces and metrics can be sent to port 4317/4318 of the OTEL collector service
+            protocols:
+              grpc:
+                endpoint: 'localhost:4317' # These are default OTEL_EXPORTER_OTLP_ENDPOINT values for grpc/http
+              http:
+                endpoint: 'localhost:4318'
+        service:
+          pipelines:
+            metrics:
+              exporters:
+                - debug
+                - prometheus
+              processors:
+                - memory_limiter
+                - batch
+              receivers:
+                - otlp
+                - spanmetrics
+            traces:
+              exporters:
+                - debug
+                - otlp
+                - spanmetrics
+              processors:
+                - memory_limiter
+                - batch
+              receivers:
+                - otlp
+      ```
+5. Before moving on to the next section, sanity check the readiness of OpenTelemetry pods and services
+
+## Deploying GuardrailsOrchestrator
 1. Create a namespace `guardrails-test`
     ```
     TEST_NS=guardrails-test
     oc create ns $TEST_NS
     ```
+
 2. Set your working directory to `guardrails/orchestrator`
     ```
     cd guardrails/orchestrator
@@ -56,6 +133,12 @@
     ```
 
 6. Deploy the orchestrator custom resource. This will create a service account, deployment, service, and route object in your namespace.
+
+    * **If you've installed OpenTelemetry in the previous section**
+      ```
+      oc apply -f orchestrator_otel_cr.yaml
+      ```
+
     ```
     oc apply -f orchestrator_cr.yaml -n $TEST_NS
     ```
